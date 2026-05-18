@@ -218,6 +218,7 @@ typedef struct {
     bool        write_mode;  /* True only during authorized write operations */
 
     /* Engine de isolamento (0 = sem engine, 1-5 = níveis de proteção) */
+    int         engine_level;
     /* Leaky Bucket for stealth attacks */
     double      bucket_credits;
     time_t      bucket_last_update;

@@ -257,8 +257,8 @@ static VaultError engine_write_binary_decoy(const char *filepath, char letter) {
     int magic_idx = (letter - 'a') % REAL_MAGIC_COUNT;
     memcpy(buf, REAL_MAGIC[magic_idx].bytes, REAL_MAGIC[magic_idx].len);
 
-    int fd = open(filepath, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
-    if (fd < 0) {
+    int out_fd = open(filepath, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (out_fd < 0) {
         if (errno == ELOOP) {
             vault_log(LOG_ALERT, "%s fopen->open ELOOP (symlink) on '%s'", ENGINE_LOG_PREFIX, filepath);
         } else {
@@ -266,9 +266,9 @@ static VaultError engine_write_binary_decoy(const char *filepath, char letter) {
         }
         return ERR_IO;
     }
-    FILE *f = fdopen(fd, "wb");
+    FILE *f = fdopen(out_fd, "wb");
     if (!f) {
-        close(fd);
+        close(out_fd);
         vault_log(LOG_ERROR, "%s fdopen(bin '%s') failed", ENGINE_LOG_PREFIX, filepath);
         return ERR_IO;
     }

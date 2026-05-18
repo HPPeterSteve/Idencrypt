@@ -1,0 +1,40 @@
+name: Build Linux Binary
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # permite rodar manualmente pelo site do GitHub
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instala dependências C
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libssl-dev libseccomp-dev libcap-dev
+
+      - name: Instala Rust estável
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache de dependências
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Compila (release)
+        run: cargo build --release
+
+      - name: Sobe o binário como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IdenVault-linux-x86_64
+          path: target/release/IdenVault
+          retention-days: 30

@@ -1,0 +1,30 @@
+name: Rust Release Build
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libssl-dev pkg-config libseccomp-dev libcap-dev
+
+    - name: Build Release
+      run: cargo build --release --verbose
+      
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: IdenVault-Linux
+        path: target/release/IdenVault

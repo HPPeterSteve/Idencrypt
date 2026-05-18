@@ -970,7 +970,7 @@ fn main() {
 
     println!(
         "{}",
-        "IdenVault v0.9.0 iniciado!  Sub-sistema de Assistência de Caminhos ATIVO.
+        "IdenVault v1.0.0 iniciado!  Sub-sistema de Assistência de Caminhos ATIVO.
         todos os direitos reservados.
         Digite 'help'"
             .bright_green()

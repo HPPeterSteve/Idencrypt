@@ -924,26 +924,7 @@ fn handle_command(parts: Vec<&str>) {
             
         }
 
-        /* vault-export <id> <file> <dst> */
-        "vault-export" => {
-            let Some(id) = parse_id(parts.get(1), "vault-export") else { return };
-            let filename = parts.get(2).map(|s| *s);
-            let dst_path = parts.get(3).map(|s| *s);
-
-            if let (Some(f), Some(d)) = (filename, dst_path) {
-                log::info(&format!("vault-export id={} file={} dst={}", id, f, d));
-                match vault::vault_export_file(id, f, d) {
-                    Ok(_)  => println!("{}", "✔ Arquivo exportado com sucesso.".green()),
-                    Err(e) => {
-                        log::error(&format!("vault-export: {}", e));
-                        eprintln!("{}", format!("✖ Erro: {}", e).red());
-                    }
-                }
-            } else {
-                eprintln!("{}", "✖ vault-export: nome do arquivo e destino obrigatórios.".red());
-            }
-        }
-
+        
         /* ── comando desconhecido — Levenshtein sugere o mais próximo ── */
         unknown => {
             log::warn(&format!("Comando inválido: {}", unknown));

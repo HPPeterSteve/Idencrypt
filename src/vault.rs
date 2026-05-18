@@ -29,7 +29,9 @@ use std::{
     fs,
     io::{BufReader, BufWriter},
     path::{Path, PathBuf},
+    os::unix::fs::OpenOptionsExt,
 };
+use libc;
 
 use std::ffi::{c_char, c_int, c_uint, CString, CStr};
 
@@ -500,10 +502,31 @@ pub fn safe_copy<P: AsRef<Path>>(src: P, dstn: P) -> Result<(), Box<dyn std::err
     let destination_path = dstn.as_ref();
     let temporary_path   = destination_path.with_extension("tmp_copy");
 
-    let source_file  = fs::File::open(source_path)?;
+    // Reject symlinks for source and destination paths to avoid symlink-traversal attacks
+    let sm = source_path.symlink_metadata()?;
+    if sm.file_type().is_symlink() {
+        return Err(format!("Refusing to copy from symlink source: {}", source_path.display()).into());
+    }
+    if destination_path.exists() {
+        let dm = destination_path.symlink_metadata()?;
+        if dm.file_type().is_symlink() {
+            return Err(format!("Refusing to write to symlink destination: {}", destination_path.display()).into());
+        }
+    }
+
+    // Open source with O_NOFOLLOW to atomically refuse symlinks
+    let source_file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(source_path)?;
     let mut origin_file = BufReader::new(source_file);
 
-    let temporary_file = fs::File::create(&temporary_path)?;
+    // Create temporary file using O_NOFOLLOW and create_new to avoid TOCTOU
+    let temporary_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&temporary_path)?;
     let mut writer = BufWriter::new(temporary_file);
 
     let mut buffer = [0u8; 65536];
@@ -525,6 +548,13 @@ pub fn secure_store(src: &str, vault: &str, password: &str) {
     if !source.exists() {
         eprintln!("Erro: Arquivo de origem não existe: {}", src);
         return;
+    }
+    // Reject symlink sources
+    if let Ok(sm) = source.symlink_metadata() {
+        if sm.file_type().is_symlink() {
+            eprintln!("Refusing to operate on symlink source: {}", src);
+            return;
+        }
     }
     if !vault_path.exists() {
         eprintln!("Erro: Cofre (diretório) não existe: {}", vault);

@@ -343,10 +343,16 @@ static void vault_prepare_jail(const char *vault_path) {
             mknod(dev_zero, S_IFCHR | 0666, makedev(1, 5));
     }
 
-    int fd = open(marker, O_CREAT | O_WRONLY | O_TRUNC, 0400);
+    int fd = open(marker, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0400);
     if (fd >= 0) {
         write(fd, "IdenVault Jail v2\n", 18);
         close(fd);
+    } else {
+        if (errno == ELOOP) {
+            vault_log(LOG_ALERT, "[SANDBOX] Detected symlink on jail marker '%s' (ELOOP)", marker);
+        } else {
+            vault_log(LOG_WARN, "[SANDBOX] open(marker '%s'): %s", marker, strerror(errno));
+        }
     }
 
     vault_log(LOG_AUDIT, "[SANDBOX] Jail prepared at '%s'", vault_path);

@@ -43,6 +43,29 @@ static inline bool is_sandbox_internal(const char *name) {
     if (strcmp(name, "lib64") == 0) return true;
     return false;
 }
+
+/* Per-file bucket helpers */
+static FileBucket *find_file_bucket(Vault *v, const char *path) {
+    if (!v || !path) return NULL;
+    FileBucket *fb = v->file_buckets;
+    while (fb) {
+        if (strncmp(fb->path, path, VAULT_PATH_MAX) == 0) return fb;
+        fb = fb->next;
+    }
+    return NULL;
+}
+
+static FileBucket *create_file_bucket(Vault *v, const char *path) {
+    if (!v || !path) return NULL;
+    FileBucket *fb = (FileBucket *)calloc(1, sizeof(FileBucket));
+    if (!fb) return NULL;
+    strncpy(fb->path, path, VAULT_PATH_MAX - 1);
+    fb->credits = 10.0;
+    fb->last_update = time(NULL);
+    fb->next = v->file_buckets;
+    v->file_buckets = fb;
+    return fb;
+}
  
 /* ═══════════════════════════════════════════════════════════════════════════
  *  SECTION 8: FILE INTEGRITY MONITOR
@@ -222,39 +245,7 @@ VaultError alert_resolve(uint32_t id, const char *password) {
  
 /* ═══════════════════════════════════════════════════════════════════════════
  *  SECTION 10: RULE ENGINE
- * ═══════════════════════════════════════════════════════════════════════════ */
- 
-void rule_add(uint32_t vault_id, int max_fails,
-              int hour_from, int hour_to) {
-    if (g_rule_count >= MAX_RULES) {
-        vault_log(LOG_WARN, "Rule table full");
-        return;
-    }
-    g_rules[g_rule_count++] = (VaultRule){
-        .vault_id            = vault_id,
-        .max_failed_attempts = max_fails,
-        .allowed_hour_from   = hour_from,
-        .allowed_hour_to     = hour_to
-    };
-    vault_log(LOG_INFO, "Rule added for vault %u: max_fails=%d hours=%d-%d",
-              vault_id, max_fails, hour_from, hour_to);
-}
- 
-void rule_evaluate(Vault *v) {
-    for (uint32_t i = 0; i < g_rule_count; i++) {
-        VaultRule *r = &g_rules[i];
-        if (r->vault_id != v->id) continue;
- 
-        if (r->max_failed_attempts > 0 &&
-            v->failed_attempts >= r->max_failed_attempts &&
-            v->status != VAULT_STATUS_LOCKED) {
-            v->status = VAULT_STATUS_LOCKED;
-            vault_log(LOG_ALERT, "[RULE] Vault '%s' LOCKED: %d failed attempts",
-                      v->name, v->failed_attempts);
-            catalog_save();
-        }
- 
-        if (r->allowed_hour_from >= 0 && r->allowed_hour_to >= 0) {
+ * ═══════════════════════════════════════════════�        if (r->allowed_hour_from >= 0 && r->allowed_hour_to >= 0) {
             time_t now = time(NULL);
             struct tm *tm = localtime(&now);
             int hour = tm->tm_hour;
@@ -271,67 +262,67 @@ void rule_evaluate(Vault *v) {
         }
     }
 }
- 
+
 /* ═══════════════════════════════════════════════════════════════════════════
  *  SECTION 11: INOTIFY MONITOR THREAD (Linux only)
  * ═══════════════════════════════════════════════════════════════════════════ */
- 
+
 #ifdef __linux__
- 
+
 void monitor_add_vault_watches(MonitorCtx *ctx) {
     for (uint32_t i = 0; i < ctx->catalog->count; i++) {
         Vault *v = &ctx->catalog->vaults[i];
         if (v->status == VAULT_STATUS_DELETED) continue;
         if (v->inotify_wd >= 0) continue;
- 
+
         v->inotify_wd = inotify_add_watch(
             ctx->inotify_fd, v->path,
-            IN_MODIFY | IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO
+            IN_MODIFY | IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_MOVE_SELF | IN_DELETE_SELF | IN_ATTRIB | IN_ACCESS
         );
- 
+
         if (v->inotify_wd < 0)
             vault_log(LOG_WARN, "inotify_add_watch '%s': %s", v->path, strerror(errno));
         else
             vault_log(LOG_INFO, "inotify watching vault '%s' (wd=%d)", v->name, v->inotify_wd);
     }
 }
- 
+
 static Vault *monitor_vault_by_wd(MonitorCtx *ctx, int wd) {
     for (uint32_t i = 0; i < ctx->catalog->count; i++)
         if (ctx->catalog->vaults[i].inotify_wd == wd)
             return &ctx->catalog->vaults[i];
     return NULL;
 }
- 
+
 void *monitor_thread(void *arg) {
     MonitorCtx *ctx = (MonitorCtx *)arg;
     char buf[INOTIFY_BUFSZ] __attribute__((aligned(8)));
- 
+
     vault_log(LOG_INFO, "Monitor thread started (inotify fd=%d)", ctx->inotify_fd);
- 
+
     /* Initial scan */
     pthread_mutex_lock(&ctx->lock);
     monitor_add_vault_watches(ctx);
     for (uint32_t i = 0; i < ctx->catalog->count; i++)
         monitor_scan_vault(&ctx->catalog->vaults[i]);
     pthread_mutex_unlock(&ctx->lock);
- 
+
     while (ctx->running) {
         fd_set rfds;
         FD_ZERO(&rfds);
         FD_SET(ctx->inotify_fd, &rfds);
         struct timeval tv = {.tv_sec = 5, .tv_usec = 0};
- 
+
         int ret = select(ctx->inotify_fd + 1, &rfds, NULL, NULL, &tv);
- 
+
         if (ret < 0) {
             if (errno == EINTR) continue;
             vault_log(LOG_ERROR, "monitor select(): %s", strerror(errno));
             break;
         }
- 
+
         pthread_mutex_lock(&ctx->lock);
- 
+
         if (ret > 0 && FD_ISSET(ctx->inotify_fd, &rfds)) {
             ssize_t len = read(ctx->inotify_fd, buf, INOTIFY_BUFSZ);
             if (len < 0) {
@@ -341,11 +332,45 @@ void *monitor_thread(void *arg) {
                 char *ptr = buf;
                 while (ptr < buf + len) {
                     struct inotify_event *ev = (struct inotify_event *)ptr;
- 
+
                     Vault *v = monitor_vault_by_wd(ctx, ev->wd);
                     if (v) {
                         const char *evname = (ev->len > 0) ? ev->name : "(unknown)";
- 
+
+                        /* Per-file Leaky Bucket: Replenish credits for this file */
+                        FileBucket *fb = find_file_bucket(v, evname);
+                        if (!fb) fb = create_file_bucket(v, evname);
+                        time_t now = time(NULL);
+                        if (fb && fb->last_update == 0) {
+                            fb->credits = 10.0;
+                            fb->last_update = now;
+                        } else if (fb) {
+                            double elapsed = difftime(now, fb->last_update);
+                            fb->credits += elapsed * 0.1; /* Refill 0.1 credit per second */
+                            if (fb->credits > 10.0) fb->credits = 10.0;
+                            fb->last_update = now;
+                        }
+
+                        /* Deduct credit on unauthorized events for this file */
+                        bool is_unauthorized_action = false;
+                        if ((ev->mask & (IN_ACCESS | IN_MODIFY | IN_ATTRIB | IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)) && !v->write_mode) {
+                            if (!is_sandbox_internal(evname)) {
+                                is_unauthorized_action = true;
+                            }
+                        }
+
+                        if (is_unauthorized_action && fb) {
+                            fb->credits -= 1.0;
+                            if (fb->credits <= 0.0) {
+                                fb->credits = 0.0;
+                                vault_log(LOG_ALERT, "[CRITICAL] Emergency! All credits exhausted for file '%s' in vault '%s'!", evname, v->name);
+                                char reason[256];
+                                snprintf(reason, sizeof(reason), "Emergency! All credits exhausted for file '%s'", evname);
+                                alert_trigger(v, reason);
+                                vault_enforce_readonly(v);
+                            }
+                        }
+
                         if (ev->mask & IN_MODIFY) {
                             if (is_sandbox_internal(evname)) {
                                 /* Sandbox writing its own marker — not an attack */
@@ -360,9 +385,55 @@ void *monitor_thread(void *arg) {
                                 vault_log(LOG_INFO, "[%s] Authorized modification: %s", v->name, evname);
                                 monitor_scan_vault(v);
                             }
+                        } else if (ev->mask & IN_ACCESS) {
+                            if (is_sandbox_internal(evname)) {
+                                vault_log(LOG_INFO, "[%s] Sandbox internal access (ignored): %s", v->name, evname);
+                            } else {
+                                vault_log(LOG_INFO, "[%s] inotify: ACCESSED %s (Remaining credits: %.2f)", v->name, evname, v->bucket_credits);
+                            }
+                        } else if (ev->mask & IN_ATTRIB) {
+                            if (is_sandbox_internal(evname)) {
+                                vault_log(LOG_INFO, "[%s] Sandbox internal attrib (ignored): %s", v->name, evname);
+                            } else if (!v->write_mode) {
+                                vault_log(LOG_ALERT, "[CRITICAL] UNAUTHORIZED ATTRIBUTE CHANGE detected on '%s' in vault '%s'!", evname, v->name);
+                                char reason[256];
+                                snprintf(reason, sizeof(reason), "Unauthorized attribute change (chmod/chown/utimes?): %s", evname);
+                                alert_trigger(v, reason);
+                                vault_enforce_readonly(v);
+                            } else {
+                                vault_log(LOG_INFO, "[%s] Authorized attribute change: %s", v->name, evname);
+                            }
+                        } else if (ev->mask & (IN_MOVE_SELF | IN_DELETE_SELF)) {
+                            vault_log(LOG_ALERT, "[CRITICAL] VAULT DIRECTORY MOVED OR DELETED: %s (wd=%d)!", v->name, ev->wd);
+                            char reason[256];
+                            snprintf(reason, sizeof(reason), "Vault directory self moved or deleted!");
+                            alert_trigger(v, reason);
+                            vault_enforce_readonly(v);
                         } else if (ev->mask & IN_CREATE) {
                             if (is_sandbox_internal(evname)) {
                                 vault_log(LOG_INFO, "[%s] Sandbox internal create (ignored): %s", v->name, evname);
+                            } else {
+                                vault_log(LOG_INFO, "[%s] inotify: CREATED %s", v->name, evname);
+                                monitor_scan_vault(v);
+                            }
+                        } else if (ev->mask & (IN_DELETE | IN_MOVED_FROM)) {
+                            if (is_sandbox_internal(evname)) {
+                                /* pivot_root temp dir being cleaned up — not an attack */
+                                vault_log(LOG_INFO, "[%s] Sandbox internal delete (ignored): %s", v->name, evname);
+                            } else {
+                                vault_log(LOG_ALERT, "[%s] inotify: DELETED/MOVED %s", v->name, evname);
+                                char reason[256];
+                                snprintf(reason, sizeof(reason), "File deleted/moved: %s", evname);
+                                alert_trigger(v, reason);
+                            }
+                        }
+                        rule_evaluate(v);
+                    }
+
+                    ptr += sizeof(struct inotify_event) + ev->len;
+                }
+            }
+        }te ((ignored): "%s", v->name, evname);
                             } else {
                                 vault_log(LOG_INFO, "[%s] inotify: CREATED %s", v->name, evname);
                                 monitor_scan_vault(v);

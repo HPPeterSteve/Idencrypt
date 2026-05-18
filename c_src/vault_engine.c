@@ -172,10 +172,19 @@ static const char *DECOY_TEMPLATES[] = {
 
 /* [FIX-4] Escreve arquivo isca de texto com conteúdo variado. */
 static VaultError engine_write_text_decoy(const char *filepath, char letter) {
-    FILE *f = fopen(filepath, "w");
+    int fd = open(filepath, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        if (errno == ELOOP) {
+            vault_log(LOG_ALERT, "%s fopen->open ELOOP (symlink) on '%s'", ENGINE_LOG_PREFIX, filepath);
+        } else {
+            vault_log(LOG_ERROR, "%s open('%s'): %s", ENGINE_LOG_PREFIX, filepath, strerror(errno));
+        }
+        return ERR_IO;
+    }
+    FILE *f = fdopen(fd, "w");
     if (!f) {
-        vault_log(LOG_ERROR, "%s fopen('%s'): %s",
-                  ENGINE_LOG_PREFIX, filepath, strerror(errno));
+        close(fd);
+        vault_log(LOG_ERROR, "%s fdopen('%s') failed", ENGINE_LOG_PREFIX, filepath);
         return ERR_IO;
     }
 
@@ -248,10 +257,19 @@ static VaultError engine_write_binary_decoy(const char *filepath, char letter) {
     int magic_idx = (letter - 'a') % REAL_MAGIC_COUNT;
     memcpy(buf, REAL_MAGIC[magic_idx].bytes, REAL_MAGIC[magic_idx].len);
 
-    FILE *f = fopen(filepath, "wb");
+    int fd = open(filepath, O_CREAT | O_WRONLY | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        if (errno == ELOOP) {
+            vault_log(LOG_ALERT, "%s fopen->open ELOOP (symlink) on '%s'", ENGINE_LOG_PREFIX, filepath);
+        } else {
+            vault_log(LOG_ERROR, "%s open(bin '%s'): %s", ENGINE_LOG_PREFIX, filepath, strerror(errno));
+        }
+        return ERR_IO;
+    }
+    FILE *f = fdopen(fd, "wb");
     if (!f) {
-        vault_log(LOG_ERROR, "%s fopen(bin '%s'): %s",
-                  ENGINE_LOG_PREFIX, filepath, strerror(errno));
+        close(fd);
+        vault_log(LOG_ERROR, "%s fdopen(bin '%s') failed", ENGINE_LOG_PREFIX, filepath);
         return ERR_IO;
     }
 

@@ -31,7 +31,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use std::ffi::{c_char, c_int, c_uint, CString};
+use std::ffi::{c_char, c_int, c_uint, CString, CStr};
 
 #[cfg(target_os = "windows")]
 use windows::Win32::Security::PSID;
@@ -328,14 +328,6 @@ pub fn vault_rule(
 }
 
 /// Exporta um arquivo do cofre para um destino externo via Core C (que chama o callback Rust).
-pub fn vault_export_file(id: u32, filename: &str, dst_path: &str) -> Result<(), String> {
-    let cs_file = to_cstring(filename, "filename")?;
-    let cs_dst  = to_cstring(dst_path, "dst_path")?;
-    
-    let code = unsafe { vault_export_file_ffi(id, cs_file.as_ptr(), cs_dst.as_ptr()) };
-    c_err(code)
-}
-
 /* 
  *  FUNÇÕES ORIGINAIS RUST — mantidas integralmente, sem renomear nada
  *  */

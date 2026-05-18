@@ -245,7 +245,39 @@ VaultError alert_resolve(uint32_t id, const char *password) {
  
 /* ═══════════════════════════════════════════════════════════════════════════
  *  SECTION 10: RULE ENGINE
- * ═══════════════════════════════════════════════�        if (r->allowed_hour_from >= 0 && r->allowed_hour_to >= 0) {
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+void rule_add(uint32_t vault_id, int max_fails,
+              int hour_from, int hour_to) {
+    if (g_rule_count >= MAX_RULES) {
+        vault_log(LOG_WARN, "Rule table full");
+        return;
+    }
+    g_rules[g_rule_count++] = (VaultRule){
+        .vault_id            = vault_id,
+        .max_failed_attempts = max_fails,
+        .allowed_hour_from   = hour_from,
+        .allowed_hour_to     = hour_to
+    };
+    vault_log(LOG_INFO, "Rule added for vault %u: max_fails=%d hours=%d-%d",
+              vault_id, max_fails, hour_from, hour_to);
+}
+
+void rule_evaluate(Vault *v) {
+    for (uint32_t i = 0; i < g_rule_count; i++) {
+        VaultRule *r = &g_rules[i];
+        if (r->vault_id != v->id) continue;
+
+        if (r->max_failed_attempts > 0 &&
+            v->failed_attempts >= r->max_failed_attempts &&
+            v->status != VAULT_STATUS_LOCKED) {
+            v->status = VAULT_STATUS_LOCKED;
+            vault_log(LOG_ALERT, "[RULE] Vault '%s' LOCKED: %d failed attempts",
+                      v->name, v->failed_attempts);
+            catalog_save();
+        }
+
+        if (r->allowed_hour_from >= 0 && r->allowed_hour_to >= 0) {
             time_t now = time(NULL);
             struct tm *tm = localtime(&now);
             int hour = tm->tm_hour;
@@ -430,28 +462,8 @@ void *monitor_thread(void *arg) {
                         rule_evaluate(v);
                     }
 
-                    ptr += sizeof(struct inotify_event) + ev->len;
-                }
-            }
-        }te ((ignored): "%s", v->name, evname);
-                            } else {
-                                vault_log(LOG_INFO, "[%s] inotify: CREATED %s", v->name, evname);
-                                monitor_scan_vault(v);
-                            }
-                        } else if (ev->mask & (IN_DELETE | IN_MOVED_FROM)) {
-                            if (is_sandbox_internal(evname)) {
-                                /* pivot_root temp dir being cleaned up — not an attack */
-                                vault_log(LOG_INFO, "[%s] Sandbox internal delete (ignored): %s", v->name, evname);
-                            } else {
-                                vault_log(LOG_ALERT, "[%s] inotify: DELETED/MOVED %s", v->name, evname);
-                                char reason[256];
-                                snprintf(reason, sizeof(reason), "File deleted/moved: %s", evname);
-                                alert_trigger(v, reason);
-                            }
-                        }
-                        rule_evaluate(v);
                     }
- 
+
                     ptr += sizeof(struct inotify_event) + ev->len;
                 }
             }

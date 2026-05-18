@@ -462,8 +462,6 @@ void *monitor_thread(void *arg) {
                         rule_evaluate(v);
                     }
 
-                    }
-
                     ptr += sizeof(struct inotify_event) + ev->len;
                 }
             }

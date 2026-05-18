@@ -81,51 +81,26 @@ const ALL_COMMANDS: &[&str] = &[
 fn show_help() {
     println!(
         "{}",
-        "
-Comandos disponíveis:
-
-── Operações de arquivo / diretório ──────────────────────────────────────
-create-vault <path>        → cria um cofre (diretório)
-add-file <vault> <file>    → adiciona arquivo ao cofre
-safe-copy <src> <dst>      → copia com segurança
-allow-write <file>         → libera escrita
-read-directory <dir>       → lista arquivos
-isolate-directory <dir>    → isola diretório
-secure-copy <file> <vault> [pass] → protege e armazena (senha opcional)
-encrypt <file> [pass]      → criptografa arquivo (senha opcional)
-decrypt <file> [pass]      → descriptografa arquivo (senha opcional)
-remove-file <vault> <file> → remove arquivo do cofre
-status <vault|id>          → mostra status do cofre
-run-in-sandbox <dir>       → roda diretório em sandbox
-
-── Core C — Vault Security System ────────────────────────────────────────
-vault-list                             → lista todos os cofres (catálogo)
-vault-create <name> <path> <type>      → cria cofre no core C
-  type: normal | protected
-vault-delete  <id>                     → deleta cofre pelo ID
-vault-rename  <id> <new_name>          → renomeia cofre
-vault-unlock  <id>                     → desbloqueia cofre após lockout
-vault-passwd  <id>                     → troca senha do cofre
-vault-encrypt <id>                     → criptografa arquivos (AES-256)
-vault-decrypt <id>                     → descriptografa arquivos
-vault-scan    <id>                     → força varredura de integridade
-vault-resolve <id>                     → resolve alerta ativo
-vault-info    <id>                     → detalhes do cofre
-vault-files   <id>                     → lista arquivos rastreados
-vault-sandbox <id>                     → abre cofre em shell sandbox
-vault-rule    <id> <max_fails> [h_from h_to]  → adiciona regra de segurança
-vault-export  <id> <file> <dst>              → exporta arquivo do cofre
-
-── Sistema ───────────────────────────────────────────────────────────────
-system-information [cpu] [memory] [disks] [networks] [processes]
-list-process-status        → lista status dos processos ativos
-derive-master-key          → deriva master key (senha + chave USB)
-
-help                       → esta ajuda
-exit                       → sair
-"
-        .cyan()
+        "Comandos disponíveis (resumido):\n\n  create-vault   add-file   read-directory   remove-file\n  safe-copy      secure-copy  allow-write   isolate-directory\n\n  vault-list     vault-create  vault-delete  vault-rename\n  vault-unlock   vault-passwd  vault-scan    vault-resolve\n  vault-info     vault-files   vault-export  vault-sandbox\n\n  system-information  list-process-status  derive-master-key\n\nUse 'help <comando>' para ver ajuda detalhada de um comando ou 'help all' para a ajuda completa."
+            .cyan()
     );
+}
+
+fn show_help_for(cmd: &str) {
+    match cmd {
+        "all" => {
+            /* Fallback: print the full detailed help (same content as before) */
+            println!(
+                "{}",
+                "\nComandos disponíveis:\n\n── Operações de arquivo / diretório ──────────────────────────────────────\ncreate-vault <path>        → cria um cofre (diretório)\nadd-file <vault> <file>    → adiciona arquivo ao cofre\nsafe-copy <src> <dst>      → copia com segurança\nallow-write <file>         → libera escrita\nread-directory <dir>       → lista arquivos\nisolate-directory <dir>    → isola diretório\nsecure-copy <file> <vault> [pass] → protege e armazena (senha opcional)\nencrypt <file> [pass]      → criptografa arquivo (senha opcional)\ndecrypt <file> [pass]      → descriptografa arquivo (senha opcional)\nremove-file <vault> <file> → remove arquivo do cofre\nstatus <vault|id>          → mostra status do cofre\nrun-in-sandbox <dir>       → roda diretório em sandbox\n\n── Core C — Vault Security System ────────────────────────────────────────\nvault-list                             → lista todos os cofres (catálogo)\nvault-create <name> <path> <type>      → cria cofre no core C\n  type: normal | protected\nvault-delete  <id>                     → deleta cofre pelo ID\nvault-rename  <id> <new_name>          → renomeia cofre\nvault-unlock  <id>                     → desbloqueia cofre após lockout\nvault-passwd  <id>                     → troca senha do cofre\nvault-encrypt <id>                     → criptografa arquivos (AES-256)\nvault-decrypt <id>                     → descriptografa arquivos\nvault-scan    <id>                     → força varredura de integridade\nvault-resolve <id>                     → resolve alerta ativo\nvault-info    <id>                     → detalhes do cofre\nvault-files   <id>                     → lista arquivos rastreados\nvault-sandbox <id>                     → abre cofre em shell sandbox\nvault-rule    <id> <max_fails> [h_from h_to]  → adiciona regra de segurança\nvault-export  <id> <file> <dst>              → exporta arquivo do cofre\n\n── Sistema ───────────────────────────────────────────────────────────────\nsystem-information [cpu] [memory] [disks] [networks] [processes]\nlist-process-status        → lista status dos processos ativos\nderive-master-key          → deriva master key (senha + chave USB)\n\nhelp                       → esta ajuda\nexit                       → sair\n"
+                    .cyan()
+            );
+        }
+        _ => {
+            println!("Ajuda detalhada para '{}':\n", cmd);
+            println!("(Descrição detalhada ainda não disponível por comando; execute 'help all' para a ajuda completa.)");
+        }
+    }
 }
 
 fn get_password(prompt_text: &str, provided_pass: Option<&&str>) -> String {
@@ -473,13 +448,10 @@ fn handle_command(parts: Vec<&str>) {
 
 
         "help" => {
-            show_help();
-            println!("{}", "Digite o número da pergunta (ou Enter para pular):".purple());
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input).unwrap();
-            let answer = input.trim();
-            if !answer.is_empty() {
-                cli::questions(answer);
+            if let Some(&cmd) = parts.get(1) {
+                show_help_for(cmd);
+            } else {
+                show_help();
             }
         }
 

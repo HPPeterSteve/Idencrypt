@@ -419,6 +419,58 @@ int vault_scan_ffi(uint32_t id) {
     return (int)ERR_OK;
 }
 
+int vault_scan_report_ffi(uint32_t id, char *out, size_t out_len) {
+#ifdef __linux__
+    pthread_mutex_lock(&g_monitor.lock);
+#endif
+    if (!out || out_len == 0) {
+#ifdef __linux__
+        pthread_mutex_unlock(&g_monitor.lock);
+#endif
+        return (int)ERR_INVALID_ARGS;
+    }
+
+    Vault *v = vault_find_by_id(id);
+    if (!v) {
+#ifdef __linux__
+        pthread_mutex_unlock(&g_monitor.lock);
+#endif
+        return (int)ERR_VAULT_NOT_FOUND;
+    }
+
+    /* perform scan and persist catalog */
+    monitor_scan_vault(v);
+    catalog_save();
+
+    int issues = 0;
+    size_t pos = 0;
+    /* iterate hashmap and collect modified entries */
+    for (int b = 0; b < HASHMAP_BUCKETS; b++) {
+        for (FileEntry *e = v->hashmap.buckets[b]; e; e = e->next) {
+            if (e->modified) {
+                issues++;
+                if (pos < out_len - 1) {
+                    int wrote = snprintf(out + pos, out_len - pos, "%s\n", e->filename);
+                    if (wrote > 0) pos += (size_t)wrote;
+                    if (pos >= out_len - 1) { pos = out_len - 1; out[pos] = '\0'; break; }
+                }
+            }
+        }
+        if (pos >= out_len - 1) break;
+    }
+
+    if (issues == 0) {
+        snprintf(out, out_len, "No issues found\n");
+    }
+
+    vault_log(LOG_INFO, "[FFI] vault_scan_report: id=%u issues=%d", v->id, issues);
+
+#ifdef __linux__
+    pthread_mutex_unlock(&g_monitor.lock);
+#endif
+    return issues;
+}
+
 int vault_resolve_ffi(uint32_t id, const char *password) {
 #ifdef __linux__
     pthread_mutex_lock(&g_monitor.lock);

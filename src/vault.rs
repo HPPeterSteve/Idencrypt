@@ -78,6 +78,7 @@ unsafe extern "C" {
 
     /* Monitor / integrity */
     fn vault_scan_ffi(id: c_uint) -> c_int;
+    fn vault_scan_report_ffi(id: c_uint, out: *mut c_char, out_len: usize) -> c_int;
     fn vault_resolve_ffi(id: c_uint, password: *const c_char) -> c_int;
 
     /* Display (print to stdout inside C) */
@@ -254,6 +255,18 @@ pub fn vault_decrypt(id: u32, password: &str) -> Result<(), String> {
 pub fn vault_scan(id: u32) -> Result<(), String> {
     let code = unsafe { vault_scan_ffi(id) };
     c_err(code)
+}
+
+/// Run a scan and return (issues_count, textual_report)
+pub fn vault_scan_report(id: u32) -> Result<(usize, String), String> {
+    let mut buf = vec![0u8; 8192];
+    let code = unsafe { vault_scan_report_ffi(id, buf.as_mut_ptr() as *mut c_char, buf.len()) };
+    if code < 0 {
+        // translate C error
+        return Err(c_err(code).err().unwrap_or_else(|| format!("Unknown error (code {})", code)));
+    }
+    let s = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }.to_string_lossy().into_owned();
+    Ok((code as usize, s))
 }
 
 /// Resolve alerta ativo no cofre.

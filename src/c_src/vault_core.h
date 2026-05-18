@@ -375,6 +375,7 @@ int vault_change_password_ffi(uint32_t id, const char *old_pass, const char *new
 int vault_encrypt_ffi(uint32_t id, const char *password);
 int vault_decrypt_ffi(uint32_t id, const char *password);
 int vault_scan_ffi(uint32_t id);
+int vault_scan_report_ffi(uint32_t id, char *out, size_t out_len);
 int vault_resolve_ffi(uint32_t id, const char *password);
 void vault_info_ffi(uint32_t id);
 void vault_list_ffi(void);

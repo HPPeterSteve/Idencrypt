@@ -170,6 +170,8 @@ typedef struct FileBucket {
     char                path[VAULT_PATH_MAX];
     double              credits;
     time_t              last_update;
+    int                 time_esgoted;
+    int                 credits_flash;
     struct FileBucket   *next;
 } FileBucket;
 

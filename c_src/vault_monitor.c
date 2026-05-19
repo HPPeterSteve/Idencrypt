@@ -60,12 +60,58 @@ static FileBucket *create_file_bucket(Vault *v, const char *path) {
     FileBucket *fb = (FileBucket *)calloc(1, sizeof(FileBucket));
     if (!fb) return NULL;
     strncpy(fb->path, path, VAULT_PATH_MAX - 1);
-    fb->credits = 10.0;
+    fb->credits = 3.0;
+    fb->time_esgoted = 0;
+    fb->credits_flash = 2;
     fb->last_update = time(NULL);
     fb->next = v->file_buckets;
     v->file_buckets = fb;
     return fb;
 }
+
+static void replenish_file_bucket_if_needed(FileBucket *fb, time_t now) {
+    if (!fb) return;
+    if (fb->last_update == 0) {
+        fb->credits = 3.0;
+        fb->time_esgoted = 0;
+        fb->credits_flash = 2;
+        fb->last_update = now;
+        return;
+    }
+    double elapsed = difftime(now, fb->last_update);
+    fb->credits += elapsed * 0.025; /* Refill 0.025 credits per second (1 credit every 40s) */
+    if (fb->credits > 3.0) fb->credits = 3.0;
+    fb->last_update = now;
+}
+
+static void deduct_credit_and_maybe_alert(Vault *v, FileBucket *fb, const char *evname) {
+    if (!fb || !v) return;
+    fb->credits -= 1.0;
+    if (fb->credits <= 0.0) {
+        fb->credits = 0.0;
+        vault_log(LOG_ALERT, "[CRITICAL] Emergency! All credits exhausted for file '%s' in vault '%s'!", evname, v->name);
+        char reason[256];
+        snprintf(reason, sizeof(reason), "Emergency! All credits exhausted for file '%s' %s", evname, fb->time_esgoted > 0 ? "(multiple times)" : "");
+        alert_trigger(v, reason);
+        vault_enforce_readonly(v);
+    } else if (fb->credits <= 1.0) {
+        fb->time_esgoted++;
+        vault_log(LOG_WARN, "[%s] Warning: Credits exhausted for file '%s' in vault '%s' (time_esgoted=%d)", v->name,
+             evname, v->name, fb->time_esgoted);
+    }
+}
+
+static void flash_credit_reduce(Vault *v, FileBucket *fb, const char *evname) {
+    if (!fb || !v) return;
+    if (fb->credits_flash > 0) {
+        fb->credits_flash--;
+        fb->credits -= 0.5; // Flash deduction
+        vault_log(LOG_WARN, "[%s] Flash deduction: -0.5 credits for file '%s' in vault '%s' (flash_credits left: %d)", v->name,
+             evname, v->name, fb->credits_flash);
+        if (fb->credits < 0.0) fb->credits = 0.0;
+    }      
+}
+
  
 /* ═══════════════════════════════════════════════════════════════════════════
  *  SECTION 8: FILE INTEGRITY MONITOR
@@ -373,15 +419,7 @@ void *monitor_thread(void *arg) {
                         FileBucket *fb = find_file_bucket(v, evname);
                         if (!fb) fb = create_file_bucket(v, evname);
                         time_t now = time(NULL);
-                        if (fb && fb->last_update == 0) {
-                            fb->credits = 10.0;
-                            fb->last_update = now;
-                        } else if (fb) {
-                            double elapsed = difftime(now, fb->last_update);
-                            fb->credits += elapsed * 0.1; /* Refill 0.1 credit per second */
-                            if (fb->credits > 10.0) fb->credits = 10.0;
-                            fb->last_update = now;
-                        }
+                        replenish_file_bucket_if_needed(fb, now);
 
                         /* Deduct credit on unauthorized events for this file */
                         bool is_unauthorized_action = false;
@@ -392,15 +430,8 @@ void *monitor_thread(void *arg) {
                         }
 
                         if (is_unauthorized_action && fb) {
-                            fb->credits -= 1.0;
-                            if (fb->credits <= 0.0) {
-                                fb->credits = 0.0;
-                                vault_log(LOG_ALERT, "[CRITICAL] Emergency! All credits exhausted for file '%s' in vault '%s'!", evname, v->name);
-                                char reason[256];
-                                snprintf(reason, sizeof(reason), "Emergency! All credits exhausted for file '%s'", evname);
-                                alert_trigger(v, reason);
-                                vault_enforce_readonly(v);
-                            }
+                            flash_credit_reduce(v, fb, evname);
+                            deduct_credit_and_maybe_alert(v, fb, evname);
                         }
 
                         if (ev->mask & IN_MODIFY) {

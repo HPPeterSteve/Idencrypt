@@ -1,9 +1,8 @@
 [package]
 name = "IdenVault"
-version = "1.2.0"
+version = "1.1.0"
 edition = "2021"
 build = "build.rs"
-
 
 
 [[bin]]
@@ -22,7 +21,6 @@ sysinfo = "0.38.4"
 home = "0.5.12"
 chrono = "0.4"
 ctrlc = "3.5.2"
-libc = "0.2"
 
 # Crypto
 aes-gcm = "0.10"

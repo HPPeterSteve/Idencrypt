@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "IdenVault"
-version = "1.2.0"
+version = "1.1.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -15,7 +15,6 @@ dependencies = [
  "hex",
  "home",
  "inquire",
- "libc",
  "rand 0.8.5",
  "rfd",
  "rustyline",

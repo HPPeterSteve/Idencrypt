@@ -77,8 +77,6 @@ const ALL_COMMANDS: &[&str] = &[
     "vault-sandbox",
     "vault-rule",
     "vault-export",
-    "add-to-vault",
-    "dump-vaults",
     "manual",
 ];
 
@@ -96,7 +94,7 @@ fn show_help_for(cmd: &str) {
             /* Fallback: print the full detailed help (same content as before) */
             println!(
                 "{}",
-                "\nComandos disponíveis:\n\n── Operações de arquivo / diretório ──────────────────────────────────────\ncreate-vault <path>        → cria um cofre (diretório)\nadd-file <vault> <file>    → adiciona arquivo ao cofre\nsafe-copy <src> <dst>      → copia com segurança\nallow-write <file>         → libera escrita\nread-directory <dir>       → lista arquivos\nisolate-directory <dir>    → isola diretório\nsecure-copy <file> <vault> [pass] → protege e armazena (senha opcional)\nencrypt <file> [pass]      → criptografa arquivo (senha opcional)\ndecrypt <file> [pass]      → descriptografa arquivo (senha opcional)\nremove-file <vault> <file> → remove arquivo do cofre\nstatus <vault|id>          → mostra status do cofre\nrun-in-sandbox <dir>       → roda diretório em sandbox\nadd-to-vault <file>        → gui CLI para adicionar um ficheiro a um cofre\n\n── Core C — Vault Security System ────────────────────────────────────────\nvault-list                             → lista todos os cofres (catálogo)\nvault-create <name> <path> <type>      → cria cofre no core C\n  type: normal | protected\nvault-delete  <id>                     → deleta cofre pelo ID\nvault-rename  <id> <new_name>          → renomeia cofre\nvault-unlock  <id>                     → desbloqueia cofre após lockout\nvault-passwd  <id>                     → troca senha do cofre\nvault-encrypt <id>                     → criptografa arquivos (AES-256)\nvault-decrypt <id>                     → descriptografa arquivos\nvault-scan    <id>                     → força varredura de integridade\nvault-resolve <id>                     → resolve alerta ativo\nvault-info    <id>                     → detalhes do cofre\nvault-files   <id>                     → lista arquivos rastreados\nvault-sandbox <id>                     → abre cofre em shell sandbox\nvault-rule    <id> <max_fails> [h_from h_to]  → adiciona regra de segurança\nvault-export  <id> <file> <dst>              → exporta arquivo do cofre\n\n── Sistema ───────────────────────────────────────────────────────────────\nsystem-information [cpu] [memory] [disks] [networks] [processes]\nlist-process-status        → lista status dos processos ativos\nderive-master-key          → deriva master key (senha + chave USB)\n\nmanual                     → manual de operação interativo\nhelp                       → esta ajuda\nexit                       → sair\n"
+                "\nComandos disponíveis:\n\n── Operações de arquivo / diretório ──────────────────────────────────────\ncreate-vault <path>        → cria um cofre (diretório)\nadd-file <vault> <file>    → adiciona arquivo ao cofre\nsafe-copy <src> <dst>      → copia com segurança\nallow-write <file>         → libera escrita\nread-directory <dir>       → lista arquivos\nisolate-directory <dir>    → isola diretório\nsecure-copy <file> <vault> [pass] → protege e armazena (senha opcional)\nencrypt <file> [pass]      → criptografa arquivo (senha opcional)\ndecrypt <file> [pass]      → descriptografa arquivo (senha opcional)\nremove-file <vault> <file> → remove arquivo do cofre\nstatus <vault|id>          → mostra status do cofre\nrun-in-sandbox <dir>       → roda diretório em sandbox\n\n── Core C — Vault Security System ────────────────────────────────────────\nvault-list                             → lista todos os cofres (catálogo)\nvault-create <name> <path> <type>      → cria cofre no core C\n  type: normal | protected\nvault-delete  <id>                     → deleta cofre pelo ID\nvault-rename  <id> <new_name>          → renomeia cofre\nvault-unlock  <id>                     → desbloqueia cofre após lockout\nvault-passwd  <id>                     → troca senha do cofre\nvault-encrypt <id>                     → criptografa arquivos (AES-256)\nvault-decrypt <id>                     → descriptografa arquivos\nvault-scan    <id>                     → força varredura de integridade\nvault-resolve <id>                     → resolve alerta ativo\nvault-info    <id>                     → detalhes do cofre\nvault-files   <id>                     → lista arquivos rastreados\nvault-sandbox <id>                     → abre cofre em shell sandbox\nvault-rule    <id> <max_fails> [h_from h_to]  → adiciona regra de segurança\nvault-export  <id> <file> <dst>              → exporta arquivo do cofre\n\n── Sistema ───────────────────────────────────────────────────────────────\nsystem-information [cpu] [memory] [disks] [networks] [processes]\nlist-process-status        → lista status dos processos ativos\nderive-master-key          → deriva master key (senha + chave USB)\n\nmanual                     → manual de operação interativo\nhelp                       → esta ajuda\nexit                       → sair\n"
                     .cyan()
             );
         }
@@ -451,65 +449,8 @@ fn handle_command(parts: Vec<&str>) {
         }
 
 
-        /* ── Comando interno para o script Python ler o catálogo C ── */
-        "dump-vaults" => {
-            let vaults = vault::vault_get_all_paths_pub();
-            for (id, path) in vaults {
-                println!("{}|{}", id, path);
-            }
-        }
-
         "manual" => {
             manual::show_manual();
-        }
-
-        /* ── Adicionar ficheiro via menu de contexto (botão direito) ── */
-        "add-to-vault" => {
-            if let Some(file_path) = path_assistant::ensure_path(parts.get(1), "Arquivo para adicionar:", false) {
-                // Obter a lista de todos os cofres
-                let vaults = vault::vault_get_all_paths_pub();
-                if vaults.is_empty() {
-                    println!("{}", "Nenhum cofre encontrado. Crie um cofre primeiro.".yellow());
-                    // Parar para o utilizador ler antes de a janela do Windows fechar
-                    let _ = inquire::Text::new("Pressione Enter para sair...").prompt();
-                    return;
-                }
-
-                // Formatar a lista para o Select
-                let mut options = Vec::new();
-                for (id, path) in &vaults {
-                    options.push(format!("ID: {} - {}", id, path));
-                }
-                options.push(">> Cancelar".to_string());
-
-                println!("{}", format!("\nAdicionando: {:?}", file_path).cyan());
-                let choice = Select::new("Selecione o cofre de destino:", options).prompt();
-
-                match choice {
-                    Ok(ans) if ans == ">> Cancelar" => {
-                        println!("{}", "Operação cancelada.".yellow());
-                    },
-                    Ok(ans) => {
-                        // Extrair o ID e o caminho da escolha
-                        let parts: Vec<&str> = ans.split(" - ").collect();
-                        if parts.len() == 2 {
-                            let vault_path = parts[1];
-                            log::info(&format!("Adicionando arquivo {:?} ao cofre {}", file_path, vault_path));
-                            match vault::add_file(vault_path, file_path.to_str().unwrap()) {
-                                Ok(_) => println!("{}", "✔ Arquivo adicionado com sucesso!".green()),
-                                Err(e) => {
-                                    log::error(&format!("Erro em add-to-vault: {}", e));
-                                    eprintln!("{}", format!("✖ Erro: {}", e).red());
-                                }
-                            }
-                        }
-                    },
-                    Err(_) => return,
-                }
-                
-                // Pausa final para não fechar a janela preta subitamente se executado pelo Windows Explorer
-                let _ = inquire::Text::new("\nPressione Enter para sair...").prompt();
-            }
         }
 
         "help" => {
@@ -591,7 +532,7 @@ fn handle_command(parts: Vec<&str>) {
             println!("{}", "  [2] Engine 2 — 3 camadas + arquivos isca a-z".white());
             println!("{}", "  [3] Engine 3 — 6 camadas + arquivos isca a-z".white());
             println!("{}", "  [4] Engine 4 — 16 camadas + binários falsos .enc".white());
-            println!("{}", "  [5] Engine 5 — 20 camadas + binários falsos .enc (OverlayFS futuro)".white());
+            println!("{}", "  [5] Engine 5 — 20 camadas + binários falsos .enc".white());
 
             let engine_level: i32 = inquire::Text::new("Engine [0-5]:")
                 .prompt()
@@ -1007,7 +948,7 @@ fn main() {
 
     println!(
         "{}",
-        "IdenVault v1.0.0 iniciado!  Sub-sistema de Assistência de Caminhos ATIVO.
+        "IdenVault v1.2.0 iniciado!  Sub-sistema de Assistência de Caminhos ATIVO.
         todos os direitos reservados.
         Digite 'help'"
             .bright_green()

@@ -34,7 +34,7 @@ extern "C" {
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>
-#include <sys/inotify.h>
+#include <sys/fanotify.h>
 #include <sys/wait.h>
 #include <pthread.h>
 #include <termios.h>
@@ -81,9 +81,7 @@ extern "C" {
 #define MAX_PASS_ATTEMPTS       3
 #define MAX_PASS_LEN            256
 
-#ifdef __linux__
-#define INOTIFY_BUFSZ           (4096 * (sizeof(struct inotify_event) + NAME_MAX + 1))
-#endif
+
 
 /* Sandbox v2 */
 #define SANDBOX_NOBODY_UID      65534
@@ -165,15 +163,13 @@ typedef struct FileEntry {
     struct FileEntry *next;
 } FileEntry;
 
-/* Per-file leaky bucket for fine-grained throttling */
-typedef struct FileBucket {
-    char                path[VAULT_PATH_MAX];
-    double              credits;
-    time_t              last_update;
-    int                 time_esgoted;
-    int                 credits_flash;
-    struct FileBucket   *next;
-} FileBucket;
+/* Authorized PIDs whitelist for anti-malware filter */
+#define MAX_AUTH_PIDS 256
+extern pid_t g_auth_pids[MAX_AUTH_PIDS];
+extern uint32_t g_auth_pid_count;
+#ifdef __linux__
+extern pthread_mutex_t g_auth_pid_lock;
+#endif
 
 /* Hash map bucket */
 #define HASHMAP_BUCKETS 256
@@ -213,19 +209,11 @@ typedef struct {
     /* Alert state */
     AlertState  alert;
 
-    /* inotify watch descriptor (Linux only) */
-    int         inotify_wd;
-
     /* Protection */
     bool        write_mode;  /* True only during authorized write operations */
 
     /* Engine de isolamento (0 = sem engine, 1-5 = níveis de proteção) */
     int         engine_level;
-    /* Leaky Bucket for stealth attacks */
-    double      bucket_credits;
-    time_t      bucket_last_update;
-    /* Optional per-file buckets (linked list) for slow-stealth detection */
-    FileBucket *file_buckets;
 } Vault;
 
 /* Catalog: flat array of vaults */
@@ -239,7 +227,7 @@ typedef struct {
 /* Monitor thread context */
 typedef struct {
     Catalog        *catalog;
-    int             inotify_fd;
+    int             fanotify_fd;
     volatile bool   running;
 #ifdef __linux__
     pthread_mutex_t lock;
@@ -386,6 +374,11 @@ int vault_export_file_ffi(uint32_t id, const char *filename, const char *dst_pat
 int vault_export_and_decrypt_file_ffi(uint32_t id, const char *filename, const char *dst_path, const char *password);
 int vault_get_real_path_ffi(uint32_t id, char *out_path, size_t out_len);
 int vault_is_protected_ffi(uint32_t id);
+
+/* PID whitelisting for anti-malware */
+void vault_auth_pid_add_ffi(pid_t pid);
+void vault_auth_pid_remove_ffi(pid_t pid);
+int vault_auth_pid_is_authorized_ffi(pid_t pid);
 
 #ifdef __cplusplus
 }

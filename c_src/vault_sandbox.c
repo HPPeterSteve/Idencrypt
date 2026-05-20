@@ -397,12 +397,16 @@ VaultError vault_sandbox_open(Vault *v, const char *password) {
 
     /* PARENT */
     if (pid > 0) {
+        vault_auth_pid_add_ffi(pid);
+
         close(sync_pipe[0]);
         sandbox_write_uid_gid_map(pid);
         close(sync_pipe[1]);
 
         int status;
         waitpid(pid, &status, 0);
+
+        vault_auth_pid_remove_ffi(pid);
 
         if (WIFSIGNALED(status)) {
             vault_log(LOG_ALERT,

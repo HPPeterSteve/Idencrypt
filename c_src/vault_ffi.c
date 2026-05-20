@@ -30,7 +30,7 @@
  *   - Initializes logging
  *   - Initializes OpenSSL
  *   - Loads catalog from disk
- *   - Initializes monitor context (inotify on Linux)
+ *   - Initializes monitor context (fanotify on Linux, requires CAP_SYS_ADMIN/root)
  *   - Starts monitor thread (Linux only)
  *
  * Must be called ONCE before any other vault_*_ffi function.
@@ -69,13 +69,13 @@ int vault_ffi_init(void) {
 
 #ifdef __linux__
     /* Init monitor context */
-    g_monitor.catalog    = &g_catalog;
-    g_monitor.running    = true;
-    g_monitor.inotify_fd = inotify_init1(IN_NONBLOCK);
+    g_monitor.catalog     = &g_catalog;
+    g_monitor.running     = true;
+    g_monitor.fanotify_fd = fanotify_init(FAN_CLASS_CONTENT | FAN_CLOEXEC, O_RDONLY | O_LARGEFILE);
 
-    if (g_monitor.inotify_fd < 0) {
-        vault_log(LOG_WARN, "inotify_init1: %s (monitor disabled)", strerror(errno));
-        /* Non-fatal: continue without monitor */
+    if (g_monitor.fanotify_fd < 0) {
+        vault_log(LOG_WARN, "fanotify_init: %s (monitor disabled - run with CAP_SYS_ADMIN/root to enable)", strerror(errno));
+        /* Non-fatal: continue without active blocking monitor */
     }
 
     if (pthread_mutex_init(&g_monitor.lock, NULL) != 0) {
@@ -84,14 +84,18 @@ int vault_ffi_init(void) {
     }
 
     /* Start monitor thread */
-    if (g_monitor.inotify_fd >= 0) {
+    if (g_monitor.fanotify_fd >= 0) {
         if (pthread_create(&g_monitor_tid, NULL, monitor_thread, &g_monitor) == 0) {
             g_monitor_started = true;
-            vault_log(LOG_INFO, "Monitor thread started");
+            vault_log(LOG_INFO, "Fanotify monitor thread started");
         } else {
             vault_log(LOG_WARN, "Failed to start monitor thread: %s", strerror(errno));
         }
     }
+
+    /* Always whitelist ourself — IdenVault must be able to access its own files */
+    vault_auth_pid_add_ffi(getpid());
+    vault_log(LOG_INFO, "Self-whitelisted PID %d", (int)getpid());
 #endif
 
     vault_log(LOG_INFO, "FFI init complete: %u vaults loaded", g_catalog.count);
@@ -122,9 +126,9 @@ int vault_ffi_shutdown(void) {
 
     pthread_mutex_destroy(&g_monitor.lock);
 
-    if (g_monitor.inotify_fd >= 0) {
-        close(g_monitor.inotify_fd);
-        g_monitor.inotify_fd = -1;
+    if (g_monitor.fanotify_fd >= 0) {
+        close(g_monitor.fanotify_fd);
+        g_monitor.fanotify_fd = -1;
     }
 #endif
 

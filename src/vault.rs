@@ -7,7 +7,7 @@
  * Core C split em 5 arquivos:
  *   vault_crypto.c   — AES-256-GCM, PBKDF2, SHA-256, logging
  *   vault_catalog.c  — hashmap, catalog save/load, vault CRUD
- *   vault_monitor.c  — inotify, alertas, rules, monitor thread
+ *   vault_monitor.c  — fanotify (PID-whitelist), alertas, rules, monitor thread
  *   vault_sandbox.c  — sandbox v2 (Linux) / stub (Windows)
  *   vault_ffi.c      — wrappers FFI + init/shutdown
  *
@@ -107,6 +107,11 @@ unsafe extern "C" {
     /* Engine de isolamento */
     fn vault_apply_engine_ffi(name: *const c_char, engine_level: c_int) -> c_int;
     fn vault_validate_engine_ffi(id: c_uint) -> c_int;
+
+    /* PID Whitelist — fanotify anti-malware (Linux only) */
+    fn vault_auth_pid_add_ffi(pid: libc::pid_t);
+    fn vault_auth_pid_remove_ffi(pid: libc::pid_t);
+    fn vault_auth_pid_is_authorized_ffi(pid: libc::pid_t) -> c_int;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -184,6 +189,39 @@ pub fn vault_shutdown() -> Result<(), String> {
     let code = unsafe { vault_ffi_shutdown() };
     c_err(code)
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ *  PID WHITELIST — fanotify anti-malware (Linux only)
+ * ───────────────────────────────────────────────────────────────────────── */
+
+/// Whitelists a PID so the fanotify monitor will allow its file access.
+/// Call this for every child process that should be trusted (e.g. a text editor
+/// launched by the user from inside the vault session).
+#[cfg(target_os = "linux")]
+pub fn vault_auth_pid_add(pid: libc::pid_t) {
+    unsafe { vault_auth_pid_add_ffi(pid) }
+}
+
+/// Removes a PID from the whitelist.  Call this when the trusted process exits.
+#[cfg(target_os = "linux")]
+pub fn vault_auth_pid_remove(pid: libc::pid_t) {
+    unsafe { vault_auth_pid_remove_ffi(pid) }
+}
+
+/// Returns `true` if the given PID (or any ancestor) is in the whitelist.
+/// The IdenVault process itself is always considered authorized.
+#[cfg(target_os = "linux")]
+pub fn vault_auth_pid_is_authorized(pid: libc::pid_t) -> bool {
+    unsafe { vault_auth_pid_is_authorized_ffi(pid) == 1 }
+}
+
+// No-op stubs for non-Linux platforms so callers compile everywhere.
+#[cfg(not(target_os = "linux"))]
+pub fn vault_auth_pid_add(_pid: i32) {}
+#[cfg(not(target_os = "linux"))]
+pub fn vault_auth_pid_remove(_pid: i32) {}
+#[cfg(not(target_os = "linux"))]
+pub fn vault_auth_pid_is_authorized(_pid: i32) -> bool { true }
 
 /* 
  *  WRAPPERS PÚBLICOS — core C via FFI

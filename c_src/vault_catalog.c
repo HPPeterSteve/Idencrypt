@@ -28,6 +28,13 @@ VaultRule   g_rules[MAX_RULES];
 uint32_t    g_rule_count = 0;
 volatile bool g_running = true;
 
+/* Authorized PIDs whitelist for anti-malware filter */
+pid_t g_auth_pids[MAX_AUTH_PIDS];
+uint32_t g_auth_pid_count = 0;
+#ifdef __linux__
+pthread_mutex_t g_auth_pid_lock = PTHREAD_MUTEX_INITIALIZER;
+#endif
+
 /* ═══════════════════════════════════════════════════════════════════════════
  *  SECTION 5: FILE HASH MAP
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -246,7 +253,6 @@ VaultError catalog_load(void) {
             }
         }
 
-        v->inotify_wd = -1;
     }
 
     #undef FREAD_CHECK
@@ -343,7 +349,6 @@ VaultError vault_create(const char *name_arg, VaultType type,
     v->status     = VAULT_STATUS_OK;
     v->created_at = time(NULL);
     v->last_check = v->created_at;
-    v->inotify_wd = -1;
 
     strncpy(v->name, name_buf, VAULT_NAME_MAX - 1);
     strncpy(v->path, path_buf, VAULT_PATH_MAX - 1);
@@ -464,4 +469,124 @@ VaultError vault_change_password(uint32_t id, const char *old_pass,
 
     vault_log(LOG_AUDIT, "Password CHANGED for vault '%s'", v->name);
     return catalog_save();
+}
+
+void vault_auth_pid_add_ffi(pid_t pid) {
+#ifdef __linux__
+    pthread_mutex_lock(&g_auth_pid_lock);
+#endif
+    /* Check if already in list */
+    for (uint32_t i = 0; i < g_auth_pid_count; i++) {
+        if (g_auth_pids[i] == pid) {
+#ifdef __linux__
+            pthread_mutex_unlock(&g_auth_pid_lock);
+#endif
+            return;
+        }
+    }
+    if (g_auth_pid_count < MAX_AUTH_PIDS) {
+        g_auth_pids[g_auth_pid_count++] = pid;
+        vault_log(LOG_INFO, "PID whitelisted: %d (Total whitelisted: %u)", pid, g_auth_pid_count);
+    } else {
+        vault_log(LOG_WARN, "Cannot whitelist PID %d: Whitelist is full!", pid);
+    }
+#ifdef __linux__
+    pthread_mutex_unlock(&g_auth_pid_lock);
+#endif
+}
+
+void vault_auth_pid_remove_ffi(pid_t pid) {
+#ifdef __linux__
+    pthread_mutex_lock(&g_auth_pid_lock);
+#endif
+    for (uint32_t i = 0; i < g_auth_pid_count; i++) {
+        if (g_auth_pids[i] == pid) {
+            /* Compact list */
+            for (uint32_t j = i; j < g_auth_pid_count - 1; j++) {
+                g_auth_pids[j] = g_auth_pids[j + 1];
+            }
+            g_auth_pid_count--;
+            vault_log(LOG_INFO, "PID removed from whitelist: %d (Total whitelisted: %u)", pid, g_auth_pid_count);
+            break;
+        }
+    }
+#ifdef __linux__
+    pthread_mutex_unlock(&g_auth_pid_lock);
+#endif
+}
+
+#ifdef __linux__
+static bool is_ancestor_authorized(pid_t pid) {
+    pid_t current = pid;
+    
+    for (int depth = 0; depth < 50; depth++) {
+        if (current <= 1) return false;
+        
+        if (current == getpid()) return true;
+        for (uint32_t i = 0; i < g_auth_pid_count; i++) {
+            if (g_auth_pids[i] == current) return true;
+        }
+        
+        char path[64];
+        snprintf(path, sizeof(path), "/proc/%d/stat", current);
+        FILE *f = fopen(path, "r");
+        if (!f) return false;
+        
+        pid_t ppid = 0;
+        int c;
+        // Skip pid
+        while ((c = fgetc(f)) != EOF && c != ' ');
+        // Skip (comm)
+        if ((c = fgetc(f)) == '(') {
+            int open_paren = 1;
+            while (open_paren > 0 && (c = fgetc(f)) != EOF) {
+                if (c == '(') open_paren++;
+                else if (c == ')') open_paren--;
+            }
+        }
+        // Skip space after ')'
+        fgetc(f);
+        // Skip state
+        fgetc(f);
+        // Skip space
+        fgetc(f);
+        // Read ppid
+        if (fscanf(f, "%d", &ppid) != 1) {
+            fclose(f);
+            return false;
+        }
+        fclose(f);
+        
+        current = ppid;
+    }
+    return false;
+}
+#endif
+
+int vault_auth_pid_is_authorized_ffi(pid_t pid) {
+    int authorized = 0;
+#ifdef __linux__
+    pthread_mutex_lock(&g_auth_pid_lock);
+    
+    if (pid == getpid()) {
+        authorized = 1;
+    } else {
+        // First check direct match
+        for (uint32_t i = 0; i < g_auth_pid_count; i++) {
+            if (g_auth_pids[i] == pid) {
+                authorized = 1;
+                break;
+            }
+        }
+        // If not found directly, walk process tree up to check for authorized ancestors
+        if (!authorized) {
+            if (is_ancestor_authorized(pid)) {
+                authorized = 1;
+            }
+        }
+    }
+    
+    pthread_mutex_unlock(&g_auth_pid_lock);
+#endif
+    return authorized;
 }

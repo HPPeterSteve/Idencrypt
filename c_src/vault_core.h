@@ -380,6 +380,15 @@ void vault_auth_pid_add_ffi(pid_t pid);
 void vault_auth_pid_remove_ffi(pid_t pid);
 int vault_auth_pid_is_authorized_ffi(pid_t pid);
 
+/* Bulk vault listing — returns (id, resolved_path) for all active vaults */
+typedef struct {
+    uint32_t id;
+    char     path[VAULT_PATH_MAX];
+} VaultIdPath;
+
+int vault_list_ids_ffi(VaultIdPath *out, uint32_t out_cap, uint32_t *out_count);
+uint32_t vault_count_ffi(void);
+
 #ifdef __cplusplus
 }
 #endif

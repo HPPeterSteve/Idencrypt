@@ -877,6 +877,46 @@ int vault_validate_engine_ffi(uint32_t id) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ *  BULK VAULT LISTING — returns (id, resolved_path) for all active vaults
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+int vault_list_ids_ffi(VaultIdPath *out, uint32_t out_cap, uint32_t *out_count) {
+    if (!out || !out_count || out_cap == 0) return (int)ERR_INVALID_ARGS;
+
+#ifdef __linux__
+    pthread_mutex_lock(&g_monitor.lock);
+#endif
+
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < g_catalog.count && n < out_cap; i++) {
+        Vault *v = &g_catalog.vaults[i];
+        out[n].id = v->id;
+
+        /* Resolve .engine_real path if applicable (same logic as vault_get_real_path_ffi) */
+        char engine_path[VAULT_PATH_MAX + 32];
+        snprintf(engine_path, sizeof(engine_path), "%s/.engine_real", v->path);
+        struct stat st;
+        if (stat(engine_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+            strncpy(out[n].path, engine_path, VAULT_PATH_MAX - 1);
+        } else {
+            strncpy(out[n].path, v->path, VAULT_PATH_MAX - 1);
+        }
+        out[n].path[VAULT_PATH_MAX - 1] = '\0';
+        n++;
+    }
+    *out_count = n;
+
+#ifdef __linux__
+    pthread_mutex_unlock(&g_monitor.lock);
+#endif
+    return (int)ERR_OK;
+}
+
+uint32_t vault_count_ffi(void) {
+    return g_catalog.count;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
  *  STANDALONE MAIN (only when NOT compiled as FFI library)
  * ═══════════════════════════════════════════════════════════════════════════ */
 #ifndef VAULT_FFI_BUILD

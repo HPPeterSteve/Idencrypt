@@ -29,8 +29,9 @@ use std::{
     fs,
     io::{BufReader, BufWriter},
     path::{Path, PathBuf},
-    os::unix::fs::OpenOptionsExt,
 };
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use libc;
 
 use std::ffi::{c_char, c_int, c_uint, CString, CStr};
@@ -112,6 +113,10 @@ unsafe extern "C" {
     fn vault_auth_pid_add_ffi(pid: libc::pid_t);
     fn vault_auth_pid_remove_ffi(pid: libc::pid_t);
     fn vault_auth_pid_is_authorized_ffi(pid: libc::pid_t) -> c_int;
+
+    /* Bulk vault listing (elimina loop 1..100_000) */
+    fn vault_list_ids_ffi(out: *mut VaultIdPath, out_cap: c_uint, out_count: *mut c_uint) -> c_int;
+    fn vault_count_ffi() -> c_uint;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -125,8 +130,107 @@ unsafe extern "C" {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
+ *  VaultIdPath — struct para bulk listing de cofres (FFI)
+ * ───────────────────────────────────────────────────────────────────────── */
+
+const VAULT_PATH_MAX: usize = 512;
+
+#[repr(C)]
+struct VaultIdPath {
+    id:   c_uint,
+    path: [u8; VAULT_PATH_MAX],
+}
+
+impl Default for VaultIdPath {
+    fn default() -> Self {
+        Self { id: 0, path: [0u8; VAULT_PATH_MAX] }
+    }
+}
+
+/// Retorna todos os (id, path) de cofres ativos do catálogo C.
+/// Substitui o antigo loop brute-force 1..=100_000.
+pub fn vault_get_all_paths_pub() -> Vec<(u32, String)> {
+    let mut buf: Vec<VaultIdPath> = (0..2048).map(|_| VaultIdPath::default()).collect();
+    let mut count: c_uint = 0;
+    let code = unsafe {
+        vault_list_ids_ffi(buf.as_mut_ptr(), buf.len() as c_uint, &mut count)
+    };
+    if code != 0 { return vec![]; }
+
+    buf.truncate(count as usize);
+    buf.iter().map(|e| {
+        let cstr = unsafe { CStr::from_ptr(e.path.as_ptr() as *const c_char) };
+        (e.id, cstr.to_string_lossy().into_owned())
+    }).collect()
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
  *  Helpers internos
  * ───────────────────────────────────────────────────────────────────────── */
+
+fn find_existing_ancestor(path: &Path) -> PathBuf {
+    let mut current = path.to_path_buf();
+    while !current.exists() {
+        if let Some(parent) = current.parent() {
+            current = parent.to_path_buf();
+        } else {
+            break;
+        }
+    }
+    current
+}
+
+fn contains_symlink(path: &Path) -> bool {
+    for ancestor in path.ancestors() {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        if let Ok(metadata) = fs::symlink_metadata(ancestor) {
+            if metadata.file_type().is_symlink() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn find_registered_vault_by_path(target_path: &Path) -> Result<PathBuf, String> {
+    // 1. Check if any component in the target_path is a symlink
+    if contains_symlink(target_path) {
+        return Err("Acesso negado: Links simbólicos não são permitidos para evitar vulnerabilidades de Symlink.".to_string());
+    }
+
+    // 2. Find the first existing ancestor of the path
+    let existing_ancestor = find_existing_ancestor(target_path);
+
+    // 3. Check if the existing ancestor contains symlinks
+    if contains_symlink(&existing_ancestor) {
+        return Err("Acesso negado: Links simbólicos detectados no caminho resolvido.".to_string());
+    }
+
+    // 4. Canonicalize the existing ancestor
+    let canonical_target = match fs::canonicalize(&existing_ancestor) {
+        Ok(path) => path,
+        Err(e) => return Err(format!("Erro de validação: Falha ao resolver o caminho '{}': {}", existing_ancestor.display(), e)),
+    };
+
+    // 5. Gather all registered vault paths using bulk listing (was: brute-force 1..=100_000)
+    for (_id, path_str) in vault_get_all_paths_pub() {
+        if path_str.is_empty() { continue; }
+        let vault_path = Path::new(&path_str);
+        if contains_symlink(vault_path) {
+            // Skip vault if it has symlinks to protect integrity
+            continue;
+        }
+        if let Ok(canonical_vault) = fs::canonicalize(vault_path) {
+            if canonical_target.starts_with(&canonical_vault) {
+                return Ok(canonical_vault);
+            }
+        }
+    }
+
+    Err("Acesso negado: O caminho especificado não reside dentro de nenhum cofre registrado e ativo no catálogo.".to_string())
+}
 
 /// Converte &str → CString; em caso de byte nulo retorna Err com mensagem.
 fn to_cstring(s: &str, label: &str) -> Result<CString, String> {
@@ -519,6 +623,14 @@ pub fn add_file(vault: &str, file: &str) -> Result<(), Box<dyn std::error::Error
     let vault_path = Path::new(vault);
     let file_path  = Path::new(file);
 
+    // Confinement validation for vault path
+    find_registered_vault_by_path(vault_path)?;
+
+    // Reject symlinks for source file
+    if contains_symlink(file_path) {
+        return Err("Acesso negado: Links simbólicos não são permitidos para o arquivo de origem.".to_string().into());
+    }
+
     if !vault_path.exists() {
         eprintln!("Cofre não encontrado: {}", vault);
         return Ok(());
@@ -532,18 +644,16 @@ pub fn add_file(vault: &str, file: &str) -> Result<(), Box<dyn std::error::Error
     let file_name   = file_path.file_name().ok_or("Falha ao obter nome do arquivo")?;
     let destination: PathBuf = vault_path.join(file_name);
 
+    // Confinement validation for destination path
+    find_registered_vault_by_path(&destination)?;
+
     if destination.exists() {
         eprintln!("Arquivo já existe no cofre: {}", destination.display());
         return Ok(());
     }
 
-    let bytes = fs::copy(file_path, &destination)?;
-
-    println!(
-        "Arquivo adicionado ao cofre: {}\nBytes copiados: {}",
-        destination.display(),
-        bytes
-    );
+    // Use safe_copy to ensure secure copying and rejection of symlinks
+    safe_copy(file_path, &destination)?;
 
     Ok(())
 }
@@ -566,18 +676,33 @@ pub fn safe_copy<P: AsRef<Path>>(src: P, dstn: P) -> Result<(), Box<dyn std::err
     }
 
     // Open source with O_NOFOLLOW to atomically refuse symlinks
+    #[cfg(unix)]
     let source_file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
         .open(source_path)?;
+
+    #[cfg(not(unix))]
+    let source_file = fs::OpenOptions::new()
+        .read(true)
+        .open(source_path)?;
+
     let mut origin_file = BufReader::new(source_file);
 
     // Create temporary file using O_NOFOLLOW and create_new to avoid TOCTOU
+    #[cfg(unix)]
     let temporary_file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .custom_flags(libc::O_NOFOLLOW)
         .open(&temporary_path)?;
+
+    #[cfg(not(unix))]
+    let temporary_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary_path)?;
+
     let mut writer = BufWriter::new(temporary_file);
 
     let mut buffer = [0u8; 65536];
@@ -596,16 +721,21 @@ pub fn secure_store(src: &str, vault: &str, password: &str) {
     let source     = Path::new(src);
     let vault_path = Path::new(vault);
 
+    // Reject symlink sources
+    if contains_symlink(source) {
+        eprintln!("Refusing to operate on symlink source: {}", src);
+        return;
+    }
+
+    // Confinement validation for vault path
+    if let Err(e) = find_registered_vault_by_path(vault_path) {
+        eprintln!("🛡️ ALERTA DE SEGURANÇA: Tentativa de operação fora de cofre registrado! Detalhes: {}", e);
+        return;
+    }
+
     if !source.exists() {
         eprintln!("Erro: Arquivo de origem não existe: {}", src);
         return;
-    }
-    // Reject symlink sources
-    if let Ok(sm) = source.symlink_metadata() {
-        if sm.file_type().is_symlink() {
-            eprintln!("Refusing to operate on symlink source: {}", src);
-            return;
-        }
     }
     if !vault_path.exists() {
         eprintln!("Erro: Cofre (diretório) não existe: {}", vault);
@@ -617,6 +747,12 @@ pub fn secure_store(src: &str, vault: &str, password: &str) {
         None => return,
     };
     let destination = vault_path.join(file_name);
+
+    // Confinement validation for destination path
+    if let Err(e) = find_registered_vault_by_path(&destination) {
+        eprintln!("🛡️ ALERTA DE SEGURANÇA: Caminho de destino fora do cofre! Detalhes: {}", e);
+        return;
+    }
 
     if let Err(e) = safe_copy(source, &destination) {
         eprintln!("Erro ao copiar arquivo para o cofre: {}", e);
@@ -635,6 +771,12 @@ pub fn secure_store(src: &str, vault: &str, password: &str) {
 pub fn read_directory(directory: &str) -> Vec<String> {
     let mut files = Vec::new();
     let path = Path::new(directory);
+
+    // Confinement validation
+    if let Err(e) = find_registered_vault_by_path(path) {
+        eprintln!("🛡️ ALERTA DE SEGURANÇA: Bloqueada tentativa de listagem fora do cofre! Detalhes: {}", e);
+        return files;
+    }
 
     let entries = match fs::read_dir(path) {
         Ok(entries) => entries,
@@ -676,6 +818,18 @@ pub extern "C" fn rust_vault_copy_file(src: *const c_char, dst: *const c_char) -
     let s_src = unsafe { std::ffi::CStr::from_ptr(src) }.to_string_lossy();
     let s_dst = unsafe { std::ffi::CStr::from_ptr(dst) }.to_string_lossy();
 
+    let path_src = Path::new(s_src.as_ref());
+    let path_dst = Path::new(s_dst.as_ref());
+
+    // Validate that either source or destination resides strictly inside a registered vault
+    let src_ok = find_registered_vault_by_path(path_src).is_ok();
+    let dst_ok = find_registered_vault_by_path(path_dst).is_ok();
+
+    if !src_ok && !dst_ok {
+        eprintln!("❌ [RUST CALLBACK] Bloqueado: Tentativa de cópia fora de cofre registrado!");
+        return -9; // ERR_PERM_DENIED (-9)
+    }
+
     match safe_copy(s_src.as_ref(), s_dst.as_ref()) {
         Ok(_) => 0,
         Err(e) => {
@@ -691,6 +845,12 @@ pub extern "C" fn rust_vault_remove_file(path: *const c_char) -> c_int {
     if path.is_null() { return -1; }
     let s_path = unsafe { std::ffi::CStr::from_ptr(path) }.to_string_lossy();
 
+    let file_path = Path::new(s_path.as_ref());
+    if let Err(e) = find_registered_vault_by_path(file_path) {
+        eprintln!("❌ [RUST CALLBACK] Bloqueado: Tentativa de remoção fora de cofre registrado! Detalhes: {}", e);
+        return -9; // ERR_PERM_DENIED (-9)
+    }
+
     match fs::remove_file(s_path.as_ref()) {
         Ok(_) => 0,
         Err(e) => {
@@ -703,6 +863,12 @@ pub extern "C" fn rust_vault_remove_file(path: *const c_char) -> c_int {
 #[allow(dead_code)]
 pub fn allow_write(path: &str) {
     let file_exists = Path::new(path);
+
+    if let Err(e) = find_registered_vault_by_path(file_exists) {
+        eprintln!("🛡️ ALERTA DE SEGURANÇA: Bloqueada tentativa de alteração fora do cofre! Detalhes: {}", e);
+        return;
+    }
+
     if !file_exists.exists() {
         println!("Arquivo não encontrado: {}", path);
         return;
@@ -720,6 +886,12 @@ pub fn allow_write(path: &str) {
 pub fn remove_file(vault: &str, file_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let vault_path = Path::new(vault);
     let file_path  = vault_path.join(file_name);
+
+    // Confinement validation for vault path
+    find_registered_vault_by_path(vault_path)?;
+
+    // Confinement validation for file path
+    find_registered_vault_by_path(&file_path)?;
 
     if !file_path.exists() {
         return Err(format!(

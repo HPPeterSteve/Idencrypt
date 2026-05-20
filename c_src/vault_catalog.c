@@ -176,7 +176,7 @@ VaultError catalog_load(void) {
     }
 
     char magic[5] = {0};
-    if (fread(magic, 1, 4, fp) != 4 || memcmp(magic, CATALOG_MAGIC, 4) != 0) {
+    if (fread(magic, 1, 4, fp) != 4 || CRYPTO_memcmp(magic, CATALOG_MAGIC, 4) != 0) {
         fclose(fp);
         vault_log(LOG_ERROR, "Catalog file corrupt or wrong format");
         return ERR_IO;

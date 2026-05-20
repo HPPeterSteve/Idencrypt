@@ -128,7 +128,7 @@ void monitor_scan_vault(Vault *v) {
                 vault_log(LOG_INFO, "[%s] New file registered: %s", v->name, de->d_name);
             }
         } else {
-            if (memcmp(e->hash, new_hash, HASH_HEX_LEN) != 0) {
+            if (CRYPTO_memcmp(e->hash, new_hash, HASH_HEX_LEN) != 0) {
                 if (!e->modified) {
                     e->modified = true;
                     vault_log(LOG_ALERT, "[%s] File MODIFIED: %s", v->name, de->d_name);
